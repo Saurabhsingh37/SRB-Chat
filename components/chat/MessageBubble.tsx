@@ -1,3 +1,4 @@
+
 "use client";
 
 import {
@@ -5,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase/client";
 
 type PreviewKind = "image" | "pdf" | null;
@@ -34,8 +36,7 @@ export default function MessageBubble({
   attachment,
   onDelete,
 }: MessageBubbleProps) {
-  const [showDelete, setShowDelete] =
-    useState(false);
+  const [showDelete, setShowDelete] = useState(false);
 
   const [attachmentUrl, setAttachmentUrl] =
     useState<string | null>(null);
@@ -43,16 +44,19 @@ export default function MessageBubble({
   const [previewKind, setPreviewKind] =
     useState<PreviewKind>(null);
 
+  const [isPreviewClosing, setIsPreviewClosing] =
+    useState(false);
+
   const [isDownloading, setIsDownloading] =
     useState(false);
 
-  const longPressTimer =
-    useRef<ReturnType<typeof setTimeout> | null>(
-      null,
-    );
+  const closePreviewTimer =
+    useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const longPressTriggered =
-    useRef(false);
+  const longPressTimer =
+    useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const longPressTriggered = useRef(false);
 
   const isImage =
     messageType === "image" ||
@@ -63,13 +67,12 @@ export default function MessageBubble({
     attachment?.fileName.toLowerCase().endsWith(".pdf") ===
       true;
 
-  const isFile =
-    messageType === "file" && !isImage;
+  const isFile = messageType === "file" && !isImage;
 
   const hasCaption =
-    Boolean(message) &&
-    message !== attachment?.fileName;
+    Boolean(message) && message !== attachment?.fileName;
 
+  // Fetch a temporary URL for the attachment.
   useEffect(() => {
     let isMounted = true;
 
@@ -104,32 +107,39 @@ export default function MessageBubble({
     };
   }, [attachment?.filePath]);
 
+  // Close the image viewer using the Escape key.
   useEffect(() => {
     if (!previewKind) {
       return;
     }
 
+    const previousOverflow = document.body.style.overflow;
+
+    document.body.style.overflow = "hidden";
+
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        setPreviewKind(null);
+        closePreview();
       }
     }
 
     document.addEventListener("keydown", handleKeyDown);
 
     return () => {
-      document.removeEventListener(
-        "keydown",
-        handleKeyDown,
-      );
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
     };
-  }, [previewKind]);
+  }, [previewKind, isPreviewClosing]);
 
+  // Clean up timers.
   useEffect(() => {
     return () => {
+      if (closePreviewTimer.current) {
+        clearTimeout(closePreviewTimer.current);
+      }
+
       if (longPressTimer.current) {
         clearTimeout(longPressTimer.current);
-        longPressTimer.current = null;
       }
     };
   }, []);
@@ -150,6 +160,25 @@ export default function MessageBubble({
         ).toFixed(1)} MB`
     : null;
 
+  // Smoothly close the image viewer.
+  const closePreview = () => {
+    if (!previewKind || isPreviewClosing) {
+      return;
+    }
+
+    setIsPreviewClosing(true);
+
+    if (closePreviewTimer.current) {
+      clearTimeout(closePreviewTimer.current);
+    }
+
+    closePreviewTimer.current = setTimeout(() => {
+      setPreviewKind(null);
+      setIsPreviewClosing(false);
+      closePreviewTimer.current = null;
+    }, 220);
+  };
+
   const handleDelete = () => {
     const confirmed = window.confirm(
       "Delete this message for everyone?",
@@ -163,6 +192,7 @@ export default function MessageBubble({
     onDelete(id);
   };
 
+  // Long press on your own message to show delete.
   const handlePointerDown = (
     event: React.PointerEvent<HTMLDivElement>,
   ) => {
@@ -241,17 +271,37 @@ export default function MessageBubble({
     }
   };
 
+  // Images open in the full-screen viewer.
+  // PDFs open in a separate browser tab.
   const openPreview = (
     kind: Exclude<PreviewKind, null>,
     event: React.MouseEvent<HTMLButtonElement>,
   ) => {
     event.stopPropagation();
 
-    if (attachmentUrl) {
-      setPreviewKind(kind);
+    if (!attachmentUrl) {
+      return;
     }
+
+    if (kind === "pdf") {
+      window.open(
+        attachmentUrl,
+        "_blank",
+        "noopener,noreferrer",
+      );
+      return;
+    }
+
+    if (closePreviewTimer.current) {
+      clearTimeout(closePreviewTimer.current);
+      closePreviewTimer.current = null;
+    }
+
+    setIsPreviewClosing(false);
+    setPreviewKind("image");
   };
 
+  // Download the original attachment from Supabase.
   const downloadAttachment = async (
     event: React.MouseEvent<HTMLButtonElement>,
   ) => {
@@ -267,37 +317,45 @@ export default function MessageBubble({
 
     setIsDownloading(true);
 
-    const { data, error } = await supabase.storage
-      .from("chat-files")
-      .download(attachment.filePath);
+    try {
+      const { data, error } = await supabase.storage
+        .from("chat-files")
+        .download(attachment.filePath);
 
-    setIsDownloading(false);
+      if (error || !data) {
+        console.error(
+          "Error downloading attachment:",
+          error?.message,
+        );
+        return;
+      }
 
-    if (error || !data) {
+      const objectUrl = URL.createObjectURL(data);
+      const link = document.createElement("a");
+
+      link.href = objectUrl;
+      link.download = attachment.fileName;
+
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      window.setTimeout(() => {
+        URL.revokeObjectURL(objectUrl);
+      }, 1000);
+    } catch (error) {
       console.error(
-        "Error downloading attachment:",
-        error?.message,
+        "Attachment download failed:",
+        error,
       );
-      return;
+    } finally {
+      setIsDownloading(false);
     }
-
-    const objectUrl = URL.createObjectURL(data);
-    const link = document.createElement("a");
-
-    link.href = objectUrl;
-    link.download = attachment.fileName;
-
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-
-    window.setTimeout(() => {
-      URL.revokeObjectURL(objectUrl);
-    }, 1000);
   };
 
   return (
     <>
+      {/* Chat message */}
       <div
         className={`flex ${
           isOwn ? "justify-end" : "justify-start"
@@ -317,6 +375,7 @@ export default function MessageBubble({
           onContextMenu={handleContextMenu}
           style={{ touchAction: "pan-y" }}
         >
+          {/* Delete button */}
           {isOwn && (
             <button
               type="button"
@@ -336,16 +395,12 @@ export default function MessageBubble({
               aria-label="Delete message"
               title="Delete message"
             >
-              <span
-                className="text-sm leading-none"
-                aria-hidden="true"
-              >
-                🗑️
-              </span>
+              <span aria-hidden="true">🗑️</span>
               <span>Delete</span>
             </button>
           )}
 
+          {/* Image attachment */}
           {isImage && attachmentUrl && (
             <button
               type="button"
@@ -364,68 +419,107 @@ export default function MessageBubble({
                 className="max-h-64 w-full rounded-xl object-cover transition duration-500 ease-out group-hover/image:scale-[1.035]"
               />
 
-              <div className="pointer-events-none absolute inset-x-3 bottom-8 flex justify-center opacity-0 transition duration-200 group-hover/image:opacity-100">
-                <span className="rounded-full bg-black/55 px-3 py-1.5 text-[11px] font-medium text-white backdrop-blur-md">
+              <span className="image-hint pointer-events-none absolute inset-x-3 bottom-3 flex justify-center opacity-0 transition duration-200 group-hover/image:opacity-100">
+                <span className="rounded-full bg-black/60 px-3 py-1.5 text-[11px] font-medium text-white backdrop-blur-md">
                   Tap to view
                 </span>
-              </div>
+              </span>
             </button>
           )}
 
+          {/* File and PDF attachments */}
           {isFile && (
-            <button
-              type="button"
-              disabled={!isPdf || !attachmentUrl}
-              onPointerDown={(event) => {
-                event.stopPropagation();
-              }}
-              onClick={(event) => {
-                if (isPdf) {
-                  openPreview("pdf", event);
+            <div className="mb-2 flex items-stretch gap-2">
+              <button
+                type="button"
+                disabled={!isPdf || !attachmentUrl}
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onClick={(event) => {
+                  if (isPdf) {
+                    openPreview("pdf", event);
+                  }
+                }}
+                className={`flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-white/10 bg-black/20 p-3 text-left transition-all duration-200 ${
+                  isPdf && attachmentUrl
+                    ? "hover:-translate-y-0.5 hover:bg-black/30 active:scale-[0.985]"
+                    : "cursor-default"
+                }`}
+                aria-label={
+                  isPdf ? "Open PDF in new tab" : "Attached file"
                 }
-              }}
-              className={`mb-2 flex w-full items-center gap-3 rounded-xl border border-white/10 bg-black/20 p-3 text-left transition-all duration-200 ${
-                isPdf && attachmentUrl
-                  ? "hover:-translate-y-0.5 hover:bg-black/30 active:scale-[0.985]"
-                  : "cursor-default"
-              }`}
-              aria-label={
-                isPdf ? "View PDF" : "Attached file"
-              }
-            >
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-red-500/10 text-xl">
-                {isPdf ? "📕" : "📄"}
-              </span>
-
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs font-semibold text-white">
-                  {attachment?.fileName || message}
+              >
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-red-500/10 text-xl">
+                  {isPdf ? "📕" : "📄"}
                 </span>
 
-                <span className="mt-1 block text-[10px] text-zinc-400">
-                  {isPdf
-                    ? "Tap to view PDF"
-                    : "File attachment"}
-                  {fileSize ? ` · ${fileSize}` : ""}
-                </span>
-              </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-semibold text-white">
+                    {attachment?.fileName || message}
+                  </span>
 
-              {isPdf && (
-                <span className="text-zinc-400 transition-transform duration-200 group-hover:translate-x-0.5">
-                  →
+                  <span className="mt-1 block text-[10px] text-zinc-400">
+                    {isPdf
+                      ? "Open PDF in new tab"
+                      : "File attachment"}
+                    {fileSize ? ` · ${fileSize}` : ""}
+                  </span>
                 </span>
-              )}
-            </button>
+
+                {isPdf && (
+                  <span className="shrink-0 text-zinc-400">
+                    ↗
+                  </span>
+                )}
+              </button>
+
+              {/* Separate attachment download button */}
+              <button
+                type="button"
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onClick={downloadAttachment}
+                disabled={
+                  !attachment?.filePath || isDownloading
+                }
+                className="flex w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-zinc-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Download attachment"
+                title="Download attachment"
+              >
+                {isDownloading ? (
+                  <span className="text-xs">…</span>
+                ) : (
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    className="h-5 w-5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <path d="m7 10 5 5 5-5" />
+                    <path d="M12 15V3" />
+                  </svg>
+                )}
+              </button>
+            </div>
           )}
 
+          {/* Text or image caption */}
           {(isImage
             ? hasCaption
-            : messageType === "text" || hasCaption) ? (
+            : messageType === "text" || hasCaption) && (
             <p className="break-words leading-relaxed">
               {message}
             </p>
-          ) : null}
+          )}
 
+          {/* Timestamp */}
           <div
             className={`mt-1 text-right text-[10px] ${
               isOwn ? "text-blue-100" : "text-zinc-500"
@@ -436,84 +530,91 @@ export default function MessageBubble({
         </div>
       </div>
 
-      {previewKind && attachmentUrl && (
-        <div
-          className="preview-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-3 sm:p-6"
-          role="dialog"
-          aria-modal="true"
-          aria-label={
-            previewKind === "image"
-              ? "Image preview"
-              : "PDF preview"
-          }
-          onClick={() => setPreviewKind(null)}
-        >
+      {/* 
+        FULL-SCREEN IMAGE VIEWER
+
+        React Portal renders the viewer directly inside document.body.
+        This keeps it outside message containers and their stacking
+        contexts, preventing other message images from appearing above it.
+      */}
+      {previewKind === "image" &&
+        attachmentUrl &&
+        typeof document !== "undefined" &&
+        createPortal(
           <div
-            className="preview-content flex h-full max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#11131f] shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
+            className={`preview-backdrop fixed inset-0 z-[99999] flex items-center justify-center bg-black/45 p-2 transition-opacity duration-200 sm:p-5 ${
+              isPreviewClosing
+                ? "preview-backdrop-closing"
+                : ""
+            }`}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Image preview"
+            onClick={closePreview}
           >
-            <header className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3 sm:px-5">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-white">
-                  {attachment?.fileName ||
-                    (previewKind === "image"
-                      ? "Image"
-                      : "Document")}
-                </p>
+            <div
+              className={`preview-content flex h-[96dvh] max-h-[96dvh] w-full max-w-[96vw] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#09090b]/95 shadow-2xl ${
+                isPreviewClosing
+                  ? "preview-content-closing"
+                  : ""
+              }`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              {/* Viewer toolbar */}
+              <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 bg-black/40 px-3 py-3 sm:px-5">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-white">
+                    {attachment?.fileName || "Image"}
+                  </p>
 
-                <p className="mt-0.5 text-[11px] text-zinc-500">
-                  {previewKind === "image"
-                    ? "Image preview"
-                    : "PDF preview"}
-                  {fileSize ? ` · ${fileSize}` : ""}
-                </p>
-              </div>
+                  <p className="mt-1 text-[11px] text-zinc-400">
+                    Full-size image
+                    {fileSize ? ` · ${fileSize}` : ""}
+                  </p>
+                </div>
 
-              <div className="flex shrink-0 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={downloadAttachment}
-                  disabled={isDownloading}
-                  className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isDownloading
-                    ? "Downloading..."
-                    : "↓ Download"}
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={downloadAttachment}
+                    disabled={isDownloading}
+                    className="rounded-full border border-white/15 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label="Download image"
+                  >
+                    {isDownloading
+                      ? "Downloading…"
+                      : "↓ Download"}
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => setPreviewKind(null)}
-                  className="rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/20"
-                  aria-label="Close preview"
-                >
-                  ✕ Close
-                </button>
-              </div>
-            </header>
+                  {/* X-only close button */}
+                  <button
+                    type="button"
+                    onClick={closePreview}
+                    aria-label="Close image viewer"
+                    title="Close"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/10 text-2xl text-white transition duration-200 hover:rotate-90 hover:bg-white/20 active:scale-90"
+                  >
+                    ×
+                  </button>
+                </div>
+              </header>
 
-            <div className="flex min-h-0 flex-1 items-center justify-center bg-black/40 p-2 sm:p-4">
-              {previewKind === "image" ? (
+              {/* Image area */}
+              <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-2 sm:p-4">
                 <img
                   src={attachmentUrl}
-                  alt={
-                    attachment?.fileName || "Uploaded image"
-                  }
-                  className="preview-image max-h-full max-w-full rounded-lg object-contain"
+                  alt={attachment?.fileName || "Uploaded image"}
+                  draggable={false}
+                  className="preview-image block max-h-full max-w-full select-none rounded-lg object-contain"
                 />
-              ) : (
-                <iframe
-                  src={attachmentUrl}
-                  title={attachment?.fileName || "PDF preview"}
-                  className="h-full min-h-[65vh] w-full rounded-lg bg-white"
-                />
-              )}
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
 
-      <style jsx>{`
+      {/* Global styles are needed because the viewer uses a React Portal. */}
+      <style jsx global>{`
         .message-bubble-enter {
           animation: messageBubbleEnter 360ms
             cubic-bezier(0.22, 1, 0.36, 1) both;
@@ -524,18 +625,30 @@ export default function MessageBubble({
         }
 
         .preview-backdrop {
-          animation: previewFadeIn 180ms ease-out both;
-          backdrop-filter: blur(8px);
+          animation: previewFadeIn 200ms ease-out both;
+          backdrop-filter: blur(24px) saturate(115%);
+          -webkit-backdrop-filter: blur(24px) saturate(115%);
+          isolation: isolate;
         }
 
         .preview-content {
           animation: previewContentIn 300ms
             cubic-bezier(0.22, 1, 0.36, 1) both;
+          transform-origin: center;
         }
 
         .preview-image {
           animation: previewImageIn 380ms
             cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+
+        .preview-backdrop-closing {
+          animation: previewFadeOut 220ms ease-in both;
+          pointer-events: none;
+        }
+
+        .preview-content-closing {
+          animation: previewContentOut 220ms ease-in both;
         }
 
         @keyframes messageBubbleEnter {
@@ -560,6 +673,16 @@ export default function MessageBubble({
           }
         }
 
+        @keyframes previewFadeOut {
+          from {
+            opacity: 1;
+          }
+
+          to {
+            opacity: 0;
+          }
+        }
+
         @keyframes previewContentIn {
           from {
             opacity: 0;
@@ -569,6 +692,18 @@ export default function MessageBubble({
           to {
             opacity: 1;
             transform: translateY(0) scale(1);
+          }
+        }
+
+        @keyframes previewContentOut {
+          from {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+
+          to {
+            opacity: 0;
+            transform: translateY(8px) scale(0.98);
           }
         }
 
@@ -588,7 +723,9 @@ export default function MessageBubble({
           .message-bubble-enter,
           .preview-backdrop,
           .preview-content,
-          .preview-image {
+          .preview-image,
+          .preview-backdrop-closing,
+          .preview-content-closing {
             animation: none;
           }
         }
