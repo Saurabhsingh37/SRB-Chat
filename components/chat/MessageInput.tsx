@@ -1,185 +1,156 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
+import AttachmentModal from "./AttachmentModal";
 
 type MessageInputProps = {
-  onSend: (message: string) => void;
+  onSend: (message: string) => void | Promise<void>;
+  onSendAttachment: (file: File) => void | Promise<void>;
 };
 
 export default function MessageInput({
   onSend,
+  onSendAttachment,
 }: MessageInputProps) {
   const [message, setMessage] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showAttachmentModal, setShowAttachmentModal] =
+    useState(false);
 
-  function handleSend() {
+  /*
+   * =========================================================
+   * SEND MESSAGE
+   * =========================================================
+   */
+
+  async function handleSend() {
     const trimmedMessage = message.trim();
 
-    if (!trimmedMessage && !selectedFile) return;
-
-    if (trimmedMessage) {
-      onSend(trimmedMessage);
+    if (!trimmedMessage) {
+      return;
     }
 
-    console.log("Attachment:", selectedFile);
+    /*
+     * Wait for ChatPage to finish
+     * inserting the message into Supabase.
+     */
+
+    await onSend(trimmedMessage);
 
     setMessage("");
-    removeFile();
   }
+
+  /*
+   * =========================================================
+   * OPEN ATTACHMENT MODAL
+   * =========================================================
+   */
 
   function handleAttachmentClick() {
-    fileInputRef.current?.click();
+    setShowAttachmentModal(true);
   }
 
-  function handleFileChange(
-    event: React.ChangeEvent<HTMLInputElement>,
-  ) {
-    const file = event.target.files?.[0];
+  /*
+   * =========================================================
+   * CLOSE ATTACHMENT MODAL
+   * =========================================================
+   */
 
-    if (!file) return;
-
-    setSelectedFile(file);
-
-    if (file.type.startsWith("image/")) {
-      const url = URL.createObjectURL(file);
-      setPreviewUrl(url);
-    } else {
-      setPreviewUrl(null);
-    }
-
-    event.target.value = "";
+  function handleAttachmentClose() {
+    setShowAttachmentModal(false);
   }
 
-  function removeFile() {
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
-    }
+  /*
+   * =========================================================
+   * SEND ATTACHMENT
+   * =========================================================
+   */
 
-    setSelectedFile(null);
-    setPreviewUrl(null);
+  async function handleSendAttachment(file: File) {
+    /*
+     * Pass the selected file to ChatPage.
+     *
+     * Uploading to Supabase Storage will be added
+     * in the next phase.
+     */
+
+    await onSendAttachment(file);
   }
+
+  /*
+   * =========================================================
+   * UI
+   * =========================================================
+   */
 
   return (
-    <div className="relative border-t border-white/[0.06] bg-[#080a14]/95 p-2 backdrop-blur-xl md:p-3">
+    <>
+      {/* =====================================================
+          MESSAGE INPUT BAR
+          ===================================================== */}
 
-      {/* Background glow */}
+      <div className="relative border-t border-white/[0.06] bg-[#080a14]/95 px-3 py-3 backdrop-blur-xl md:px-5 md:py-4">
+        {/* ================= BACKGROUND GLOW ================= */}
 
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          <div className="absolute -bottom-20 left-1/4 h-40 w-72 rounded-full bg-blue-600/[0.05] blur-3xl" />
 
-        <div className="absolute -bottom-16 left-1/4 h-32 w-64 rounded-full bg-blue-600/[0.04] blur-3xl" />
+          <div className="absolute -bottom-24 right-1/4 h-44 w-72 rounded-full bg-violet-600/[0.05] blur-3xl" />
+        </div>
 
-        <div className="absolute -bottom-20 right-1/4 h-36 w-64 rounded-full bg-violet-600/[0.04] blur-3xl" />
+        {/* ================= MESSAGE COMPOSER ================= */}
 
-      </div>
-
-      {/* Hidden file input */}
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*,.pdf,.doc,.docx,.txt"
-        className="hidden"
-        onChange={handleFileChange}
-      />
-
-      {/* Attachment Preview */}
-
-      {selectedFile && (
-        <div className="relative z-10 mb-2 flex items-center gap-3 rounded-2xl border border-white/[0.07] bg-white/[0.035] p-2 backdrop-blur-xl">
-
-          {/* Image preview */}
-
-          {previewUrl ? (
-            <img
-              src={previewUrl}
-              alt={selectedFile.name}
-              className="h-12 w-12 rounded-xl object-cover"
-            />
-          ) : (
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 text-xl">
-              📄
-            </div>
-          )}
-
-          {/* File information */}
-
-          <div className="min-w-0 flex-1">
-
-            <p className="truncate text-sm font-medium text-zinc-200">
-              {selectedFile.name}
-            </p>
-
-            <p className="text-[10px] text-zinc-500">
-              {(selectedFile.size / 1024).toFixed(1)} KB
-            </p>
-
-          </div>
-
-          {/* Remove */}
+        <div className="relative z-10 mx-auto flex max-w-4xl items-center gap-2 rounded-2xl border border-white/[0.08] bg-white/[0.045] p-2 shadow-xl shadow-black/10 backdrop-blur-xl transition-all duration-300 focus-within:border-blue-500/30 focus-within:bg-white/[0.055] focus-within:shadow-blue-500/[0.06] md:gap-3 md:rounded-3xl md:p-2.5">
+          {/* ================= ATTACHMENT ================= */}
 
           <button
             type="button"
-            onClick={removeFile}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 transition hover:bg-white/[0.06] hover:text-white active:scale-90"
-            aria-label="Remove attachment"
+            onClick={handleAttachmentClick}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/[0.05] text-xl text-zinc-500 transition-all duration-200 hover:bg-white/[0.07] hover:text-blue-400 active:scale-90 md:h-12 md:w-12 md:rounded-2xl"
+            aria-label="Attach file"
           >
-            ✕
+            +
           </button>
 
+          {/* ================= MESSAGE INPUT ================= */}
+
+          <input
+            type="text"
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                handleSend();
+              }
+            }}
+            placeholder="Write a message..."
+            className="min-w-0 flex-1 bg-transparent px-1 text-[15px] text-white outline-none placeholder:text-zinc-600 md:px-2 md:text-base"
+          />
+
+          {/* ================= SEND ================= */}
+
+          <button
+            type="button"
+            onClick={handleSend}
+            disabled={!message.trim()}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 text-lg text-white shadow-lg shadow-blue-500/20 transition-all duration-200 hover:scale-105 hover:shadow-blue-500/30 active:scale-90 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100 md:h-12 md:w-12 md:rounded-2xl"
+            aria-label="Send message"
+          >
+            ➤
+          </button>
         </div>
-      )}
-
-      {/* Input */}
-
-      <div className="relative z-10 flex items-center gap-2 rounded-2xl border border-white/[0.07] bg-white/[0.035] p-1.5 shadow-lg shadow-black/10 backdrop-blur-xl transition-all duration-300 focus-within:border-blue-500/30 focus-within:bg-white/[0.05]">
-
-        {/* Attachment */}
-
-        <button
-          type="button"
-          onClick={handleAttachmentClick}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-lg text-zinc-500 transition-all duration-300 hover:bg-white/[0.06] hover:text-white active:scale-90"
-          aria-label="Attach file"
-        >
-          +
-        </button>
-
-        {/* Message */}
-
-        <input
-          type="text"
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              handleSend();
-            }
-          }}
-          placeholder={
-            selectedFile
-              ? "Add a message..."
-              : "Message..."
-          }
-          className="min-w-0 flex-1 bg-transparent px-1 text-sm text-white outline-none placeholder:text-zinc-600 md:px-2"
-        />
-
-        {/* Send */}
-
-        <button
-          type="button"
-          onClick={handleSend}
-          disabled={!message.trim() && !selectedFile}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 text-white shadow-lg shadow-blue-500/20 transition-all duration-300 hover:scale-105 active:scale-90 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:scale-100"
-          aria-label="Send message"
-        >
-          ➤
-        </button>
-
       </div>
 
-    </div>
+      {/* =====================================================
+          ATTACHMENT MODAL
+          ===================================================== */}
+
+      {showAttachmentModal && (
+        <AttachmentModal
+          onClose={handleAttachmentClose}
+          onSendAttachment={handleSendAttachment}
+        />
+      )}
+    </>
   );
 }

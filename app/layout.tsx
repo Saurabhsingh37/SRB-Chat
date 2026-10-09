@@ -17,13 +17,22 @@ export const metadata: Metadata = {
   description: "A modern, real-time chat application.",
 };
 
+// I noticed LayoutProps wasn't imported in your snippet, 
+// so if you get a type error, you can revert this line to:
+// export default function RootLayout({ children }: { children: React.ReactNode }) {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning // <-- Added here
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body 
+        className="min-h-full flex flex-col" 
+        suppressHydrationWarning // <-- Added here
+      >
+        {children}
+      </body>
     </html>
   );
 }
